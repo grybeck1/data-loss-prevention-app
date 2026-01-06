@@ -1,13 +1,10 @@
 import streamlit as st
 import pandas as pd
 from databricks import sql
+from databricks.sdk.core import Config
 import os
-from pathlib import Path
-import configparser
 from datetime import datetime
 import getpass
-from databricks.sdk.core import Config as DatabricksConfig
-from databricks.sdk import WorkspaceClient
 
 # Page configuration
 st.set_page_config(
@@ -15,6 +12,12 @@ st.set_page_config(
     page_icon="🔒",
     layout="wide"
 )
+
+# Initialize Databricks Config (automatically loads from environment variables)
+try:
+    cfg = Config()
+except Exception:
+    cfg = None  # Will be None in local development mode
 
 # Function to check if running as Databricks App
 def is_databricks_app():
@@ -44,23 +47,10 @@ def get_databricks_app_user():
     Pattern from: https://docs.databricks.com/en/dev-tools/databricks-apps/
     """
     try:
-        # Try new st.context.headers (Streamlit 1.27+) first
-        try:
-            import streamlit as st_ctx
-            if hasattr(st_ctx, 'context'):
-                headers = st_ctx.context.headers
-            else:
-                # Fall back to deprecated method for older Streamlit versions
-                from streamlit.web.server.websocket_headers import _get_websocket_headers
-                headers = _get_websocket_headers()
-        except:
-            # Fall back to deprecated method
-            from streamlit.web.server.websocket_headers import _get_websocket_headers
-            headers = _get_websocket_headers()
-        
-        email = headers.get('X-Forwarded-Email', None)
-        token = headers.get('X-Forwarded-Access-Token', None)
-        host = headers.get('X-Forwarded-Host', None)
+        # Use modern st.context.headers API (Streamlit 1.27+)
+        email = st.context.headers.get('X-Forwarded-Email')
+        token = st.context.headers.get('X-Forwarded-Access-Token')
+        host = st.context.headers.get('X-Forwarded-Host')
         
         # If host not in headers, try to construct from environment
         if not host:
@@ -77,6 +67,7 @@ def get_databricks_app_user():
             'is_databricks_app': token is not None
         }
     except Exception as e:
+        # Not running in Databricks App context or headers not available
         return {
             'email': None,
             'token': None,
@@ -86,88 +77,19 @@ def get_databricks_app_user():
 
 # Audit logging function
 def log_audit_event(event_type, details, user_email=None):
-    """Log data access and export events for compliance"""
+    """Log data access and export events for compliance to stdout"""
     try:
-        log_dir = Path.home() / ".dlp_app_logs"
-        log_dir.mkdir(exist_ok=True)
-        log_file = log_dir / "audit_log.txt"
-        
         timestamp = datetime.now().isoformat()
         username = user_email or getpass.getuser()
         
-        log_entry = f"[{timestamp}] USER={username} EVENT={event_type} DETAILS={details}\n"
+        log_entry = f"[{timestamp}] USER={username} EVENT={event_type} DETAILS={details}"
         
-        with open(log_file, 'a') as f:
-            f.write(log_entry)
+        # Log to stdout for Databricks App logging
+        print(log_entry)
     except Exception as e:
         # Silently fail - don't break the app if logging fails
         pass
 
-# Function to load Databricks profiles from ~/.databrickscfg
-def load_databricks_profiles():
-    """Load profiles from ~/.databrickscfg if it exists"""
-    config_path = Path.home() / ".databrickscfg"
-    if not config_path.exists():
-        return {}
-    
-    config = configparser.ConfigParser()
-    config.read(config_path)
-    
-    profiles = {}
-    for section in config.sections():
-        # Get host and clean it
-        host = config.get(section, 'host', fallback=None)
-        if host:
-            # Remove https:// and trailing slashes
-            host = host.replace('https://', '').replace('http://', '').rstrip('/')
-        
-        # Get token and auth_type
-        token = config.get(section, 'token', fallback=None)
-        auth_type = config.get(section, 'auth_type', fallback=None)
-        
-        # ONLY include token-based profiles to avoid OAuth hanging issues
-        # OAuth profiles require interactive flow which doesn't work well in Streamlit
-        if host and token:
-            profiles[section] = {
-                'host': host,
-                'token': token,
-                'auth_type': auth_type,
-                'is_oauth': False,  # We only load token profiles
-            }
-    
-    return profiles
-
-# Function to get OAuth credentials for a profile
-def get_oauth_credentials(profile_name):
-    """Get OAuth credentials using Databricks SDK for a specific profile"""
-    try:
-        # Use the Databricks SDK to handle OAuth authentication
-        # The SDK reads from ~/.databrickscfg and handles token refresh
-        cfg = DatabricksConfig(profile=profile_name)
-        
-        # Try to get the token - SDK should use cached credentials
-        # This should NOT trigger an interactive OAuth flow if already authenticated
-        try:
-            token = cfg.token
-            if token:
-                return token
-        except Exception as token_error:
-            # Token retrieval failed, try to get from WorkspaceClient
-            # which may handle OAuth refresh better
-            try:
-                from databricks.sdk import WorkspaceClient
-                w = WorkspaceClient(profile=profile_name)
-                # The client should have authenticated, get the token
-                if hasattr(w.config, 'token') and w.config.token:
-                    return w.config.token
-                else:
-                    raise Exception("Could not retrieve OAuth token from profile")
-            except Exception as client_error:
-                raise Exception(f"OAuth token retrieval failed. Try re-authenticating with: databricks auth login --profile {profile_name}")
-        
-        raise Exception(f"No token found in profile {profile_name}")
-    except Exception as e:
-        raise Exception(f"OAuth authentication failed: {str(e)}")
 
 # Title and description
 st.title("🔒 Data Loss Prevention App")
@@ -176,148 +98,55 @@ st.markdown("Export data from Unity Catalog tables with ease")
 # Sidebar for connection settings
 st.sidebar.header("Databricks Connection")
 
-# Check if running as Databricks App with built-in auth
+# Check if running as Databricks App
 user_context = get_databricks_app_user()
 is_databricks_app_mode = user_context['is_databricks_app']
+warehouse_id = os.getenv('DATABRICKS_WAREHOUSE_ID')
 
-if is_databricks_app_mode:
-    # Databricks App mode - use forwarded credentials
+if is_databricks_app_mode and cfg:
+    # Databricks App mode - use forwarded credentials and Config
     st.sidebar.success("🎯 **Databricks App Mode**")
     st.sidebar.info(f"👤 Signed in as: **{user_context['email']}**")
     st.sidebar.caption("Using your Databricks credentials automatically")
     
-    # Set variables for connection
     auth_method = "Databricks App"
-    server_hostname = user_context.get('host', '')
+    server_hostname = cfg.host
     access_token = user_context['token']
     
-    # Still need HTTP path from config
-    http_path = os.getenv("SQL_WAREHOUSE", os.getenv("DATABRICKS_HTTP_PATH", ""))
-    
-    if not server_hostname:
-        st.sidebar.error("⚠️ Databricks host not detected. Check app configuration.")
-    
-    if not http_path:
-        st.sidebar.warning("⚠️ SQL Warehouse not configured. Please set SQL_WAREHOUSE in app.yaml")
-    
-    databricks_profiles = {}  # Not needed in app mode
+    # Build HTTP path from warehouse_id
+    if warehouse_id:
+        http_path = f"/sql/1.0/warehouses/{warehouse_id}"
+    else:
+        http_path = None
+        st.sidebar.warning("⚠️ SQL Warehouse not configured. Please set DATABRICKS_WAREHOUSE_ID in app.yaml")
 else:
-    # Local mode - show authentication options
-    # Load Databricks CLI profiles
-    databricks_profiles = load_databricks_profiles()
+    # Local mode - manual entry only
+    st.sidebar.info("🔒 **Local Development Mode**")
+    auth_method = "Manual Entry"
     
-    # Authentication method selection
-    auth_method = st.sidebar.radio(
-        "Authentication Method:",
-        options=["Databricks CLI Profile (Recommended)", "Environment Variables", "Manual Entry"],
-        index=0 if databricks_profiles else (1 if os.getenv("DATABRICKS_TOKEN") else 2),
-        help="Choose how to authenticate with Databricks"
-    )
-
-# Initialize connection variables if not in Databricks App mode
-if not is_databricks_app_mode:
-    server_hostname = ""
-    http_path = ""
-    access_token = ""
-
-if not is_databricks_app_mode and auth_method == "Databricks CLI Profile (Recommended)":
-    if databricks_profiles:
-        profile_name = st.sidebar.selectbox(
-            "Select Profile",
-            options=list(databricks_profiles.keys()),
-            help="Token-based profiles from ~/.databrickscfg"
-        )
-        
-        if profile_name:
-            profile = databricks_profiles[profile_name]
-            server_hostname = profile['host'] or ""
-            access_token = profile['token'] or ""
-            
-            st.sidebar.success(f"✅ Using profile: **{profile_name}**")
-            st.sidebar.info(f"🔒 Host: `{server_hostname}`")
-            
-            # Still need HTTP path
-            # Check for SQL_WAREHOUSE env var (Databricks App deployment) or DATABRICKS_HTTP_PATH
-            default_http_path = os.getenv("SQL_WAREHOUSE", os.getenv("DATABRICKS_HTTP_PATH", ""))
-            http_path = st.sidebar.text_input(
-                "HTTP Path",
-                value=default_http_path,
-                help="e.g., /sql/1.0/warehouses/xxxxx",
-                placeholder="/sql/1.0/warehouses/xxxxx"
-            )
-            
-            # Store profile info in session state for connection
-            if 'selected_profile' not in st.session_state:
-                st.session_state.selected_profile = None
-            st.session_state.selected_profile = profile_name
-    else:
-        # Check if config file exists
-        config_path = Path.home() / ".databrickscfg"
-        if config_path.exists():
-            st.sidebar.warning("⚠️ No token-based profiles found in `~/.databrickscfg`.")
-            st.sidebar.info("""
-            Your config file exists but contains no profiles with access tokens.
-            
-            **Create a token profile:**
-            ```ini
-            [my-profile]
-            host = https://your-workspace.cloud.databricks.com
-            token = dapi...your-token...
-            ```
-            
-            Get a token from: Databricks → User Settings → Access Tokens
-            """)
-        else:
-            st.sidebar.warning("⚠️ No Databricks config found at `~/.databrickscfg`.")
-            st.sidebar.markdown("""
-            **Create ~/.databrickscfg:**
-            ```ini
-            [DEFAULT]
-            host = https://your-workspace.cloud.databricks.com
-            token = dapi...your-token...
-            ```
-            
-            Get a token from: Databricks → User Settings → Access Tokens
-            """)
-        # Fall back to environment variables or manual entry
-        auth_method = "Environment Variables" if os.getenv("DATABRICKS_TOKEN") else "Manual Entry"
-
-if not is_databricks_app_mode and auth_method == "Environment Variables":
-    server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME", "")
-    # Support both DATABRICKS_HTTP_PATH and SQL_WAREHOUSE (Databricks App deployment)
-    http_path = os.getenv("SQL_WAREHOUSE", os.getenv("DATABRICKS_HTTP_PATH", ""))
-    access_token = os.getenv("DATABRICKS_TOKEN", "")
-    
-    if all([server_hostname, http_path, access_token]):
-        st.sidebar.success("✅ Using environment variables")
-    else:
-        st.sidebar.warning("⚠️ Environment variables not fully set")
-        st.sidebar.code("""
-export DATABRICKS_SERVER_HOSTNAME="..."
-export DATABRICKS_HTTP_PATH="..."
-export DATABRICKS_TOKEN="..."
-        """)
-
-if not is_databricks_app_mode and auth_method == "Manual Entry":
-    st.sidebar.warning("🔒 **Security Warning**: Manual entry is less secure. Use CLI or env vars for production.")
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Connection Details")
     
     server_hostname = st.sidebar.text_input(
         "Server Hostname",
         value="",
-        help="e.g., your-workspace.cloud.databricks.com"
+        help="e.g., your-workspace.cloud.databricks.com",
+        placeholder="your-workspace.cloud.databricks.com"
     )
     
     http_path = st.sidebar.text_input(
         "HTTP Path",
         value="",
-        help="e.g., /sql/1.0/warehouses/xxxxx"
+        help="e.g., /sql/1.0/warehouses/xxxxx",
+        placeholder="/sql/1.0/warehouses/xxxxx"
     )
     
     access_token = st.sidebar.text_input(
         "Access Token",
         value="",
         type="password",
-        help="Your Databricks personal access token"
+        help="Your Databricks personal access token",
+        placeholder="dapi..."
     )
 
 # Initialize session state
@@ -338,10 +167,11 @@ if 'terms_accepted' not in st.session_state:
 connect_button_label = "Connect to Databricks" if not is_databricks_app_mode else "🔌 Connect to SQL Warehouse"
 if st.sidebar.button(connect_button_label):
     # Check if we have the minimum requirements
-    if not server_hostname or not http_path:
+    if not server_hostname or not http_path or not access_token:
         missing = []
         if not server_hostname: missing.append("Server Hostname")
         if not http_path: missing.append("HTTP Path")
+        if not access_token: missing.append("Access Token")
         st.sidebar.warning(f"⚠️ Missing: {', '.join(missing)}")
     else:
         try:
@@ -350,24 +180,24 @@ if st.sidebar.button(connect_button_label):
                 st.sidebar.info(f"🔌 Connecting to: `{server_hostname}`")
                 st.sidebar.info(f"📍 HTTP Path: `{http_path}`")
                 
-                # Validate we have an access token
-                if not access_token:
-                    raise Exception("Access token is required")
-                
-                # Connect to Databricks with timeout
-                connection = sql.connect(
+                # Connect to Databricks using the user's access token
+                with sql.connect(
                     server_hostname=server_hostname,
                     http_path=http_path,
-                    access_token=access_token,
-                    _session_timeout=30  # 30 second timeout
-                )
-                st.session_state.connection = connection
+                    access_token=access_token
+                ) as connection:
+                    with connection.cursor() as cursor:
+                        # Test connection and fetch catalogs
+                        cursor.execute("SHOW CATALOGS")
+                        st.session_state.catalogs = [row[0] for row in cursor.fetchall()]
                 
-                # Fetch catalogs
-                cursor = connection.cursor()
-                cursor.execute("SHOW CATALOGS")
-                st.session_state.catalogs = [row[0] for row in cursor.fetchall()]
-                cursor.close()
+                # Store connection details for later queries
+                st.session_state.connection_config = {
+                    'server_hostname': server_hostname,
+                    'http_path': http_path,
+                    'access_token': access_token
+                }
+                st.session_state.connection = True  # Mark as connected
                 
                 # Log successful connection
                 auth_info = "DatabricksApp" if is_databricks_app_mode else "Token"
@@ -389,7 +219,7 @@ if st.sidebar.button(connect_button_label):
                                    "**Solution**: Generate a new token in Databricks:\n"
                                    "1. Go to User Settings > Access Tokens\n"
                                    "2. Click 'Generate New Token'\n"
-                                   "3. Update your ~/.databrickscfg or use Manual Entry")
+                                   "3. Copy and paste it above")
             elif "404" in error_msg or "not found" in error_msg.lower():
                 st.sidebar.warning("💡 **Path Issue**: Check that the HTTP Path is correct.\n\n"
                                    "Find it in: SQL Warehouses > Your Warehouse > Connection Details")
@@ -402,7 +232,9 @@ if st.sidebar.button(connect_button_label):
                                    "3. Firewall settings")
 
 # Main content
-if st.session_state.connection:
+if st.session_state.connection and 'connection_config' in st.session_state:
+    config = st.session_state.connection_config
+    
     col1, col2, col3 = st.columns(3)
     
     # Catalog selector
@@ -417,10 +249,10 @@ if st.session_state.connection:
     with col2:
         if selected_catalog:
             try:
-                cursor = st.session_state.connection.cursor()
-                cursor.execute(f"SHOW SCHEMAS IN {selected_catalog}")
-                st.session_state.schemas = [row[0] for row in cursor.fetchall()]
-                cursor.close()
+                with sql.connect(**config) as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(f"SHOW SCHEMAS IN {selected_catalog}")
+                        st.session_state.schemas = [row[0] for row in cursor.fetchall()]
             except Exception as e:
                 st.error(f"Error fetching schemas: {str(e)}")
                 st.session_state.schemas = []
@@ -437,10 +269,10 @@ if st.session_state.connection:
     with col3:
         if selected_catalog and selected_schema:
             try:
-                cursor = st.session_state.connection.cursor()
-                cursor.execute(f"SHOW TABLES IN {selected_catalog}.{selected_schema}")
-                st.session_state.tables = [row[1] for row in cursor.fetchall()]
-                cursor.close()
+                with sql.connect(**config) as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(f"SHOW TABLES IN {selected_catalog}.{selected_schema}")
+                        st.session_state.tables = [row[1] for row in cursor.fetchall()]
             except Exception as e:
                 st.error(f"Error fetching tables: {str(e)}")
                 st.session_state.tables = []
@@ -467,15 +299,15 @@ if st.session_state.connection:
         if st.button("Load Data", type="primary"):
             try:
                 with st.spinner(f"Loading data from {selected_table}..."):
-                    cursor = st.session_state.connection.cursor()
                     query = f"SELECT * FROM {selected_catalog}.{selected_schema}.{selected_table} LIMIT {row_limit}"
-                    cursor.execute(query)
                     
-                    # Fetch data into pandas dataframe
-                    columns = [desc[0] for desc in cursor.description]
-                    rows = cursor.fetchall()
-                    st.session_state.data = pd.DataFrame(rows, columns=columns)
-                    cursor.close()
+                    # Query with user's token using context manager
+                    with sql.connect(**config) as connection:
+                        with connection.cursor() as cursor:
+                            cursor.execute(query)
+                            # Use fetchall_arrow for better performance
+                            result = cursor.fetchall_arrow().to_pandas()
+                            st.session_state.data = result
                     
                     # Reset terms acceptance when loading new data
                     st.session_state.terms_accepted = False
@@ -484,7 +316,7 @@ if st.session_state.connection:
                     user_email = user_context.get('email') if is_databricks_app_mode else None
                     log_audit_event(
                         "DATA_LOADED",
-                        f"table={selected_catalog}.{selected_schema}.{selected_table}, rows={len(st.session_state.data)}, columns={len(columns)}",
+                        f"table={selected_catalog}.{selected_schema}.{selected_table}, rows={len(st.session_state.data)}, columns={len(st.session_state.data.columns)}",
                         user_email=user_email
                     )
                     
@@ -609,54 +441,47 @@ else:
         Click the **Connect to SQL Warehouse** button in the sidebar to begin.
         """.format(user_context.get('email', 'Unknown')))
     else:
-        st.info("👈 Please connect to Databricks using the sidebar")
+        st.info("👈 Please enter your Databricks credentials in the sidebar to get started")
         
         st.markdown("""
         ### 🔒 Getting Started
         
-        Choose your authentication method in the sidebar. We recommend:
+        Enter your Databricks connection details in the sidebar:
         
-        #### 🥇 Best: Databricks CLI Profile
-        
-        Create `~/.databrickscfg` with your credentials:
-        
-        ```ini
-        [DEFAULT]
-        host = https://your-workspace.cloud.databricks.com
-        token = dapi...your-token...
-        ```
-        
-        Get a token from: **Databricks → User Settings → Access Tokens**
-        
-        Then select the profile in the sidebar!
-        
-        #### 🥈 Good: Environment Variables
-        
-        ```bash
-        export DATABRICKS_SERVER_HOSTNAME="your-workspace.cloud.databricks.com"
-        export DATABRICKS_HTTP_PATH="/sql/1.0/warehouses/xxxxx"
-        export DATABRICKS_TOKEN="dapi...your-token..."
-        ```
-        
-        #### 🥉 Quick Test: Manual Entry
-        
-        Enter credentials directly in the sidebar (local development only).
+        1. **Server Hostname** - Your Databricks workspace URL
+        2. **HTTP Path** - Your SQL Warehouse connection path
+        3. **Access Token** - Your personal access token
         
         ---
         
-        ### 💡 Getting Your Credentials:
+        ### 💡 How to Get Your Credentials:
         
-        **Access Token:**
-        1. Open Databricks workspace
-        2. Click your profile → **User Settings**
-        3. Go to **Access Tokens** → **Generate New Token**
-        4. Copy the token (starts with `dapi`)
+        #### Access Token:
+        1. Open your Databricks workspace
+        2. Click your profile icon → **User Settings**
+        3. Go to **Access Tokens** tab
+        4. Click **Generate New Token**
+        5. Copy the token (starts with `dapi`)
         
-        **HTTP Path:**
-        1. Go to **SQL Warehouses**
-        2. Click your warehouse
-        3. Go to **Connection Details** tab
-        4. Copy the HTTP Path (e.g., `/sql/1.0/warehouses/abc123`)
+        #### Server Hostname:
+        - Found in your browser URL bar when logged into Databricks
+        - Example: `your-workspace.cloud.databricks.com`
+        - **Don't include** `https://`
+        
+        #### HTTP Path:
+        1. Go to **SQL Warehouses** in Databricks
+        2. Click on your SQL Warehouse
+        3. Go to the **Connection Details** tab
+        4. Copy the **Server hostname** and **HTTP path**
+        5. Example HTTP path: `/sql/1.0/warehouses/abc123def456`
+        
+        ---
+        
+        ### 🚀 Once Connected:
+        - Browse Unity Catalog tables
+        - Preview data before export
+        - Accept Terms of Use
+        - Download as CSV or JSON
         """)
 
 # Footer
@@ -667,19 +492,24 @@ with col_footer1:
 with col_footer2:
     st.caption("📋 All activity logged for compliance")
     
-# Show audit log location
+# Show audit log information
 with st.expander("ℹ️ Audit Logging Information"):
-    log_path = Path.home() / ".dlp_app_logs" / "audit_log.txt"
-    st.info(f"""
+    st.info("""
     **Audit Trail**: All data access and export activities are logged for compliance purposes.
     
-    **Log Location**: `{log_path}`
+    **Log Output**: Application logs (stdout/stderr)
     
     **Logged Events**:
+    - Database connections
     - Data table access and loading
     - Terms of Use acceptance
-    - Connection attempts
+    - User identity (when in Databricks App mode)
     
-    This audit trail may be reviewed by security and compliance teams.
+    **Log Format**:
+    ```
+    [timestamp] USER=user@company.com EVENT=event_type DETAILS=details
+    ```
+    
+    Logs are captured by the Databricks platform and can be reviewed by security and compliance teams.
     """)
 

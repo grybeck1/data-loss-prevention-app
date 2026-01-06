@@ -46,8 +46,6 @@ Thumbs.db
 
 # Logs
 *.log
-.dlp_app_logs/
-audit_log.txt
 
 
 .databricks

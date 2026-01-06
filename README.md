@@ -7,7 +7,7 @@ A simple Streamlit application for securely exporting data from Databricks Unity
 ## Features
 
 - 🎯 **Native Databricks App** with built-in authentication via forwarded headers
-- 🔐 Multiple authentication methods: Databricks App (built-in), OAuth, tokens
+- 🔐 **Simple authentication**: Manual entry for local dev, automatic for Databricks Apps
 - 📊 Browse Unity Catalog: catalogs, schemas, and tables
 - 👀 Preview table data before export
 - 📥 Export data in multiple formats (CSV, JSON)
@@ -27,122 +27,81 @@ A simple Streamlit application for securely exporting data from Databricks Unity
 pip install -r requirements.txt
 ```
 
-3. **(Recommended)** Install and configure Databricks CLI with OAuth:
+3. Run the app:
 
 ```bash
-pip install databricks-cli
-databricks auth login --host https://your-workspace.cloud.databricks.com
+streamlit run app.py
 ```
-
-This will authenticate via OAuth 2.0 and securely store your credentials in `~/.databrickscfg`. **No access token needed!**
 
 ## Usage
 
-### 🥇 Method 1: Databricks CLI with OAuth (BEST - No Token Needed!)
+### 🖥️ Local Development
 
-The most secure and convenient method using OAuth 2.0:
+Run the app locally and enter credentials in the sidebar:
 
 ```bash
-# One-time setup: Authenticate with Databricks CLI
-databricks auth login --host https://your-workspace.cloud.databricks.com
-
-# Run the app
 streamlit run app.py
 ```
 
-In the app:
-1. Select **"Databricks CLI Profile (Recommended)"**
-2. Choose your OAuth profile (marked with 🔐 OAuth)
-3. Enter your SQL Warehouse HTTP path
-4. Click **Connect** - the app will automatically use OAuth (no token needed!)
+In the app sidebar, enter:
+1. **Server Hostname** - Your Databricks workspace URL (e.g., `your-workspace.cloud.databricks.com`)
+2. **HTTP Path** - SQL Warehouse path (e.g., `/sql/1.0/warehouses/xxxxx`)
+3. **Access Token** - Personal access token from Databricks
 
-**Benefits:**
-- 🔐 **OAuth 2.0** authentication (no manual access tokens!)
-- 🔄 **Automatic token rotation** and refresh
-- 💾 Credentials stored securely in `~/.databrickscfg`
-- ✨ No environment variables needed
-- 🛡️ **Most secure** - tokens never exposed in the app
+**Get credentials from:**
+- **Access Token**: Databricks → User Settings → Access Tokens → Generate New Token
+- **HTTP Path**: SQL Warehouses → Your Warehouse → Connection Details
 
 ---
 
-### 🥈 Method 2: Environment Variables
+### 🚀 Databricks App Deployment (Production)
 
-For automation or CI/CD pipelines:
-
-```bash
-# Set environment variables
-export DATABRICKS_SERVER_HOSTNAME="your-workspace.cloud.databricks.com"
-export DATABRICKS_HTTP_PATH="/sql/1.0/warehouses/xxxxx"
-export DATABRICKS_TOKEN="your-access-token"
-
-# Run the app
-streamlit run app.py
-```
-
-**Pro Tip**: Create a `.env` file (already in `.gitignore`):
+When deployed as a Databricks App, authentication is automatic - no credentials needed!
 
 ```bash
-# .env
-DATABRICKS_SERVER_HOSTNAME=your-workspace.cloud.databricks.com
-DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/xxxxx
-DATABRICKS_TOKEN=your-access-token-here
+databricks apps deploy data-loss-prevention-app \
+  --source-code-path . \
+  --config app.yaml
 ```
 
-Then source it:
-```bash
-set -a; source .env; set +a
-streamlit run app.py
-```
-
----
-
-### 🥉 Method 3: Manual Entry (Local Dev Only)
-
-Enter credentials directly in the UI sidebar. **Not recommended** - use only for quick testing on your local machine.
+The app automatically uses the authenticated user's credentials via forwarded headers.
 
 ### Authentication Methods Summary
 
-The app supports three authentication methods, ranked by security:
+The app supports two authentication modes:
 
-| Method | Security | Token Required? | Convenience | Use Case |
-|--------|----------|----------------|-------------|----------|
-| **Databricks CLI (OAuth)** | 🔐🔐🔐 Best | ❌ No! | ⭐⭐⭐ Easy | **Recommended for all users** |
-| **Environment Variables** | 🔐🔐 Good | ✅ Yes | ⭐⭐ Medium | CI/CD, automation |
-| **Manual Entry** | 🔐 Low | ✅ Yes | ⭐ Hard | Quick local testing only |
+| Mode | Authentication | Configuration | Use Case |
+|------|---------------|---------------|----------|
+| **Databricks App** | Automatic via forwarded headers | Zero config needed | **Production deployment** |
+| **Local Development** | Manual token entry | Enter credentials in UI | Local testing and development |
 
-**✨ OAuth profiles (marked with 🔐) don't require any access token - the app handles authentication automatically using secure OAuth 2.0!**
+**✨ When deployed as a Databricks App, users authenticate automatically with their Databricks credentials!**
 
-### How to Get Credentials
+### How to Get Credentials (Local Development)
 
-#### For Databricks CLI with OAuth (Recommended - No Token!):
-1. Install: `pip install databricks-cli`
-2. Run: `databricks auth login --host https://your-workspace.cloud.databricks.com`
-3. Complete OAuth flow in browser (one-time setup)
-4. Your OAuth credentials are automatically saved to `~/.databrickscfg`
-5. In the app, look for profiles marked with 🔐 OAuth
+#### Access Token:
+1. Open your Databricks workspace
+2. Click on your profile icon (top right)
+3. Go to **User Settings**
+4. Click **Access Tokens** tab
+5. Click **Generate New Token**
+6. Give it a name and set expiration (optional)
+7. Click **Generate**
+8. Copy the token (starts with `dapi`) - **save it securely!**
 
-**Note**: OAuth profiles in `~/.databrickscfg` look like this:
-```
-[my-profile]
-host = https://your-workspace.cloud.databricks.com/
-auth_type = databricks-cli
-```
+**Security Note**: Use read-only permissions if possible.
 
-The app will handle OAuth token refresh automatically - no manual token management needed!
+#### Server Hostname:
+- Found in your Databricks workspace URL
+- Example: If your URL is `https://abc-123.cloud.databricks.com/`, your hostname is `abc-123.cloud.databricks.com`
+- **Don't include** `https://` or trailing slashes
 
-#### For Manual/Environment Variable Setup:
-1. **Server Hostname**: Found in your Databricks workspace URL (e.g., `your-workspace.cloud.databricks.com`)
-2. **Access Token**:
-   - In Databricks, click on your user profile
-   - Go to User Settings > Access Tokens
-   - Click "Generate New Token"
-   - Set appropriate permissions (read-only recommended)
-
-#### HTTP Path (Required for all methods):
-- Go to **SQL Warehouses** in Databricks
-- Select your warehouse
-- Go to **Connection Details** tab
-- Copy the **HTTP Path** (e.g., `/sql/1.0/warehouses/xxxxx`)
+#### HTTP Path:
+1. Go to **SQL Warehouses** in Databricks
+2. Select your SQL Warehouse
+3. Go to **Connection Details** tab
+4. Copy the **HTTP Path**
+5. Example format: `/sql/1.0/warehouses/abc123def456`
 
 ## Workflow
 
@@ -164,33 +123,37 @@ Before downloading any data, users must accept the Terms of Use, which include:
 - Acknowledgment of audit logging
 
 ### Audit Logging
-All activity is automatically logged for compliance and security purposes:
+All activity is automatically logged to stdout for compliance and security purposes:
 
 **Logged Events:**
 - Database connections (timestamp, user, host)
 - Data table access (table name, row count, columns)
 - Terms of Use acceptance
-- Data export preparations
+- User identity (email in Databricks App mode)
 
-**Log Location:** `~/.dlp_app_logs/audit_log.txt`
+**Log Output:** Application stdout (captured by Databricks platform logs)
 
 **Log Format:**
 ```
-[2026-01-06T12:34:56] USER=username EVENT=DATA_LOADED DETAILS=table=catalog.schema.table, rows=1000
-[2026-01-06T12:35:10] USER=username EVENT=TERMS_ACCEPTED DETAILS=table=catalog.schema.table, rows=1000
+[2026-01-06T12:34:56] USER=user@company.com EVENT=DATA_LOADED DETAILS=table=catalog.schema.table, rows=1000
+[2026-01-06T12:35:10] USER=user@company.com EVENT=TERMS_ACCEPTED DETAILS=table=catalog.schema.table, rows=1000
 ```
+
+**Viewing Logs:**
+- **Databricks App**: View in Databricks App logs interface
+- **Local Development**: Check terminal output where you ran `streamlit run app.py`
 
 These audit logs can be reviewed by security and compliance teams to track data access patterns and ensure policy compliance.
 
 ## 🔐 Security Best Practices
 
 ### For Local Development:
-- ✅ **Use Databricks CLI authentication** (`databricks auth login`) - OAuth 2.0 with automatic token rotation
-- ✅ **Second choice: environment variables** - better than manual entry
-- ✅ Never commit access tokens to version control (`.env` files are in `.gitignore`)
+- ✅ Never commit access tokens to version control
 - ✅ Use tokens with **read-only permissions** scoped to specific catalogs/schemas
 - ✅ Rotate tokens regularly and revoke unused tokens
-- ✅ Use `~/.databrickscfg` for CLI-based auth (automatically managed)
+- ✅ Don't share tokens between users
+- ✅ Set token expiration dates for added security
+- ✅ Use strong passwords for your Databricks account
 
 ### For Production/Shared Environments:
 **⚠️ This app is designed for local development only.** For production deployment, you should implement:
@@ -204,24 +167,26 @@ These audit logs can be reviewed by security and compliance teams to track data 
 7. **Session Management**: Implement proper session timeouts and invalidation
 8. **Databricks Authentication Context**: For Databricks App Store, use native Databricks auth instead of tokens
 
-### Why CLI/Environment Variables Are Safer:
+### Why Databricks App Mode is Most Secure:
 
-**Databricks CLI:**
-- Uses OAuth 2.0 (no manual token handling)
+**Built-in Authentication:**
+- Uses OAuth 2.0 via Databricks platform
 - Automatic token rotation and renewal
-- Credentials encrypted and stored in secure config file
-- Browser-based authentication flow
+- Per-user access control
+- No credential management needed
 
-**Environment Variables:**
-- Not stored in browser memory or accessible via developer tools
-- Not transmitted between browser and server
-- Can be managed by secure shell environments and CI/CD pipelines
-- Easier to rotate without code changes
+**Benefits:**
+- Each user authenticates with their own Databricks account
+- Unity Catalog enforces row/column-level security per user
+- Full audit trail with user identity
+- Zero configuration for end users
+- No manual token handling or exposure
 
-**Both avoid:**
-- Manual token entry in UI
-- Token exposure in browser developer tools
-- Accidental token leakage through screenshots or screen sharing
+**For Local Development:**
+- Tokens are only used temporarily
+- Not stored permanently in the app
+- Use strong, expiring tokens
+- Keep your Databricks account secure
 
 ## Requirements
 
@@ -264,7 +229,8 @@ databricks apps deploy data-loss-prevention-app \
 
 The app uses the following environment variables when deployed:
 - `STREAMLIT_BROWSER_GATHER_USAGE_STATS`: Disabled for privacy
-- `SQL_WAREHOUSE`: Automatically populated from Databricks App resources
+- `DATABRICKS_APP_MODE`: Set to "true" to enable Databricks App mode
+- `DATABRICKS_WAREHOUSE_ID`: Automatically populated from Databricks App resources (references the warehouse ID)
 
 ### Authentication in Databricks Apps
 
