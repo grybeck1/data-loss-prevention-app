@@ -120,34 +120,27 @@ if is_databricks_app_mode and cfg:
         http_path = None
         st.sidebar.warning("⚠️ SQL Warehouse not configured. Please set DATABRICKS_WAREHOUSE_ID in app.yaml")
 else:
-    # Local mode - manual entry only
+    # Local mode - use environment variables
     st.sidebar.info("🔒 **Local Development Mode**")
-    auth_method = "Manual Entry"
+    st.sidebar.caption("Using environment variables")
+    auth_method = "Environment Variables"
     
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Connection Details")
+    # Read from environment variables
+    server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME", "")
+    http_path = os.getenv("DATABRICKS_HTTP_PATH", "")
+    access_token = os.getenv("DATABRICKS_TOKEN", "")
     
-    server_hostname = st.sidebar.text_input(
-        "Server Hostname",
-        value="",
-        help="e.g., your-workspace.cloud.databricks.com",
-        placeholder="your-workspace.cloud.databricks.com"
-    )
-    
-    http_path = st.sidebar.text_input(
-        "HTTP Path",
-        value="",
-        help="e.g., /sql/1.0/warehouses/xxxxx",
-        placeholder="/sql/1.0/warehouses/xxxxx"
-    )
-    
-    access_token = st.sidebar.text_input(
-        "Access Token",
-        value="",
-        type="password",
-        help="Your Databricks personal access token",
-        placeholder="dapi..."
-    )
+    # Show status
+    if server_hostname and http_path and access_token:
+        st.sidebar.success("✅ Environment variables detected")
+        st.sidebar.caption(f"Host: `{server_hostname}`")
+    else:
+        st.sidebar.error("⚠️ Missing environment variables")
+        missing = []
+        if not server_hostname: missing.append("DATABRICKS_SERVER_HOSTNAME")
+        if not http_path: missing.append("DATABRICKS_HTTP_PATH")
+        if not access_token: missing.append("DATABRICKS_TOKEN")
+        st.sidebar.code(f"Missing: {', '.join(missing)}")
 
 # Initialize session state
 if 'connection' not in st.session_state:
@@ -163,73 +156,56 @@ if 'data' not in st.session_state:
 if 'terms_accepted' not in st.session_state:
     st.session_state.terms_accepted = False
 
-# Connect button (or auto-connect in Databricks App mode)
-connect_button_label = "Connect to Databricks" if not is_databricks_app_mode else "🔌 Connect to SQL Warehouse"
-if st.sidebar.button(connect_button_label):
-    # Check if we have the minimum requirements
-    if not server_hostname or not http_path or not access_token:
-        missing = []
-        if not server_hostname: missing.append("Server Hostname")
-        if not http_path: missing.append("HTTP Path")
-        if not access_token: missing.append("Access Token")
-        st.sidebar.warning(f"⚠️ Missing: {', '.join(missing)}")
-    else:
-        try:
-            with st.spinner("Connecting to Databricks..."):
-                # Debug info
-                st.sidebar.info(f"🔌 Connecting to: `{server_hostname}`")
-                st.sidebar.info(f"📍 HTTP Path: `{http_path}`")
-                
-                # Connect to Databricks using the user's access token
-                with sql.connect(
-                    server_hostname=server_hostname,
-                    http_path=http_path,
-                    access_token=access_token
-                ) as connection:
-                    with connection.cursor() as cursor:
-                        # Test connection and fetch catalogs
-                        cursor.execute("SHOW CATALOGS")
-                        st.session_state.catalogs = [row[0] for row in cursor.fetchall()]
-                
-                # Store connection details for later queries
-                st.session_state.connection_config = {
-                    'server_hostname': server_hostname,
-                    'http_path': http_path,
-                    'access_token': access_token
-                }
-                st.session_state.connection = True  # Mark as connected
-                
-                # Log successful connection
-                auth_info = "DatabricksApp" if is_databricks_app_mode else "Token"
-                user_email = user_context.get('email') if is_databricks_app_mode else None
-                log_audit_event(
-                    "CONNECTION_SUCCESS",
-                    f"host={server_hostname}, method={auth_method}, auth_type={auth_info}",
-                    user_email=user_email
-                )
-                
-                st.sidebar.success("✅ Connected successfully!")
-        except Exception as e:
-            error_msg = str(e)
-            st.sidebar.error(f"❌ Connection failed: {error_msg}")
+# Auto-connect if credentials are available
+if server_hostname and http_path and access_token and not st.session_state.connection:
+    try:
+        with st.spinner("Connecting to Databricks..."):
+            # Connect to Databricks using the user's access token
+            with sql.connect(
+                server_hostname=server_hostname,
+                http_path=http_path,
+                access_token=access_token
+            ) as connection:
+                with connection.cursor() as cursor:
+                    # Test connection and fetch catalogs
+                    cursor.execute("SHOW CATALOGS")
+                    st.session_state.catalogs = [row[0] for row in cursor.fetchall()]
             
-            # Provide helpful hints
-            if "Invalid access token" in error_msg or "401" in error_msg or "INVALID_TOKEN" in error_msg:
-                st.sidebar.warning("💡 **Token Issue**: The access token may be expired or invalid.\n\n"
-                                   "**Solution**: Generate a new token in Databricks:\n"
-                                   "1. Go to User Settings > Access Tokens\n"
-                                   "2. Click 'Generate New Token'\n"
-                                   "3. Copy and paste it above")
-            elif "404" in error_msg or "not found" in error_msg.lower():
-                st.sidebar.warning("💡 **Path Issue**: Check that the HTTP Path is correct.\n\n"
-                                   "Find it in: SQL Warehouses > Your Warehouse > Connection Details")
-            elif "host" in error_msg.lower() or "hostname" in error_msg.lower():
-                st.sidebar.warning("💡 **Host Issue**: Verify the server hostname is correct")
-            elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
-                st.sidebar.warning("💡 **Timeout**: Connection timed out. Check:\n"
-                                   "1. SQL Warehouse is running\n"
-                                   "2. Network connectivity\n"
-                                   "3. Firewall settings")
+            # Store connection details for later queries
+            st.session_state.connection_config = {
+                'server_hostname': server_hostname,
+                'http_path': http_path,
+                'access_token': access_token
+            }
+            st.session_state.connection = True  # Mark as connected
+            
+            # Log successful connection
+            auth_info = "DatabricksApp" if is_databricks_app_mode else "EnvironmentVariables"
+            user_email = user_context.get('email') if is_databricks_app_mode else None
+            log_audit_event(
+                "CONNECTION_SUCCESS",
+                f"host={server_hostname}, method={auth_method}, auth_type={auth_info}",
+                user_email=user_email
+            )
+            
+            st.sidebar.success("✅ Connected successfully!")
+    except Exception as e:
+        error_msg = str(e)
+        st.sidebar.error(f"❌ Connection failed: {error_msg}")
+        
+        # Provide helpful hints
+        if "Invalid access token" in error_msg or "401" in error_msg or "INVALID_TOKEN" in error_msg:
+            st.sidebar.warning("💡 **Token Issue**: The access token may be expired or invalid.\n\n"
+                               "**Solution**: Update your DATABRICKS_TOKEN environment variable")
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            st.sidebar.warning("💡 **Path Issue**: Check DATABRICKS_HTTP_PATH environment variable")
+        elif "host" in error_msg.lower() or "hostname" in error_msg.lower():
+            st.sidebar.warning("💡 **Host Issue**: Check DATABRICKS_SERVER_HOSTNAME environment variable")
+        elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            st.sidebar.warning("💡 **Timeout**: Connection timed out. Check:\n"
+                               "1. SQL Warehouse is running\n"
+                               "2. Network connectivity\n"
+                               "3. Firewall settings")
 
 # Main content
 if st.session_state.connection and 'connection_config' in st.session_state:
@@ -239,9 +215,15 @@ if st.session_state.connection and 'connection_config' in st.session_state:
     
     # Catalog selector
     with col1:
+        # Default to "samples" if available
+        default_catalog_index = 0
+        if "samples" in st.session_state.catalogs:
+            default_catalog_index = st.session_state.catalogs.index("samples")
+        
         selected_catalog = st.selectbox(
             "Select Catalog",
             options=st.session_state.catalogs,
+            index=default_catalog_index,
             key="catalog_selector"
         )
     
@@ -257,9 +239,15 @@ if st.session_state.connection and 'connection_config' in st.session_state:
                 st.error(f"Error fetching schemas: {str(e)}")
                 st.session_state.schemas = []
             
+            # Default to "nyctaxi" if available
+            default_schema_index = 0
+            if "nyctaxi" in st.session_state.schemas:
+                default_schema_index = st.session_state.schemas.index("nyctaxi")
+            
             selected_schema = st.selectbox(
                 "Select Schema",
                 options=st.session_state.schemas,
+                index=default_schema_index,
                 key="schema_selector"
             )
         else:
@@ -277,9 +265,15 @@ if st.session_state.connection and 'connection_config' in st.session_state:
                 st.error(f"Error fetching tables: {str(e)}")
                 st.session_state.tables = []
             
+            # Default to "trips" if available
+            default_table_index = 0
+            if "trips" in st.session_state.tables:
+                default_table_index = st.session_state.tables.index("trips")
+            
             selected_table = st.selectbox(
                 "Select Table",
                 options=st.session_state.tables,
+                index=default_table_index,
                 key="table_selector"
             )
         else:
@@ -294,7 +288,7 @@ if st.session_state.connection and 'connection_config' in st.session_state:
             st.subheader(f"📊 Table: {selected_catalog}.{selected_schema}.{selected_table}")
         
         with col_b:
-            row_limit = st.number_input("Row Limit", min_value=1, max_value=100000, value=1000)
+            row_limit = st.number_input("Row Limit", min_value=1, max_value=100000, value=10)
         
         if st.button("Load Data", type="primary"):
             try:
@@ -326,7 +320,7 @@ if st.session_state.connection and 'connection_config' in st.session_state:
         
         # Display data
         if st.session_state.data is not None:
-            st.dataframe(st.session_state.data, width='stretch', height=400)
+            st.dataframe(data=st.session_state.data, height=400, use_container_width=True)
             
             # Export options with Terms of Use
             st.divider()
@@ -441,16 +435,21 @@ else:
         Click the **Connect to SQL Warehouse** button in the sidebar to begin.
         """.format(user_context.get('email', 'Unknown')))
     else:
-        st.info("👈 Please enter your Databricks credentials in the sidebar to get started")
+        st.info("👈 Set environment variables to connect to Databricks")
         
         st.markdown("""
-        ### 🔒 Getting Started
+        ### 🔒 Local Development Setup
         
-        Enter your Databricks connection details in the sidebar:
+        Set these environment variables before running the app:
         
-        1. **Server Hostname** - Your Databricks workspace URL
-        2. **HTTP Path** - Your SQL Warehouse connection path
-        3. **Access Token** - Your personal access token
+        ```bash
+        export DATABRICKS_SERVER_HOSTNAME="your-workspace.cloud.databricks.com"
+        export DATABRICKS_HTTP_PATH="/sql/1.0/warehouses/xxxxx"
+        export DATABRICKS_TOKEN="dapi...your-token..."
+        
+        # Then run the app
+        streamlit run app.py
+        ```
         
         ---
         
@@ -472,16 +471,18 @@ else:
         1. Go to **SQL Warehouses** in Databricks
         2. Click on your SQL Warehouse
         3. Go to the **Connection Details** tab
-        4. Copy the **Server hostname** and **HTTP path**
-        5. Example HTTP path: `/sql/1.0/warehouses/abc123def456`
+        4. Copy the **HTTP path**
+        5. Example: `/sql/1.0/warehouses/abc123def456`
         
         ---
         
-        ### 🚀 Once Connected:
-        - Browse Unity Catalog tables
-        - Preview data before export
-        - Accept Terms of Use
-        - Download as CSV or JSON
+        ### 🚀 Features:
+        - ✅ Auto-connect to SQL Warehouse
+        - ✅ Browse Unity Catalog tables
+        - ✅ Preview data before export
+        - ✅ Terms of Use acceptance required
+        - ✅ Download as CSV or JSON
+        - ✅ Full audit logging
         """)
 
 # Footer

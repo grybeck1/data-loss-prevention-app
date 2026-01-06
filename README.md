@@ -37,20 +37,24 @@ streamlit run app.py
 
 ### 🖥️ Local Development
 
-Run the app locally and enter credentials in the sidebar:
+Set environment variables and run the app:
 
 ```bash
+# Set credentials
+export DATABRICKS_SERVER_HOSTNAME="your-workspace.cloud.databricks.com"
+export DATABRICKS_HTTP_PATH="/sql/1.0/warehouses/xxxxx"
+export DATABRICKS_TOKEN="...your-token..."
+
+# Run the app
 streamlit run app.py
 ```
 
-In the app sidebar, enter:
-1. **Server Hostname** - Your Databricks workspace URL (e.g., `your-workspace.cloud.databricks.com`)
-2. **HTTP Path** - SQL Warehouse path (e.g., `/sql/1.0/warehouses/xxxxx`)
-3. **Access Token** - Personal access token from Databricks
+The app will automatically connect using these environment variables.
 
 **Get credentials from:**
 - **Access Token**: Databricks → User Settings → Access Tokens → Generate New Token
 - **HTTP Path**: SQL Warehouses → Your Warehouse → Connection Details
+- **Hostname**: Your Databricks workspace URL (without `https://`)
 
 ---
 
